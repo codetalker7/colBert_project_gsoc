@@ -7,3 +7,6 @@ Some files, ideas and other stuff for the ColBERT GSoC project.
 4. RAG tutorial: https://forem.julialang.org/svilupp/building-a-rag-chatbot-over-dataframesjl-documentation-hands-on-guide-449m
 5. RAG survey paper: https://arxiv.org/pdf/2312.10997.pdf
 6. Another RAG paper for NLP Tasks: https://arxiv.org/pdf/2005.11401.pdf
+7. ColBERT paper: https://arxiv.org/pdf/2004.12832.pdf
+8. ColBERTv2 paper: https://arxiv.org/abs/2112.01488 
+9. ColBERT repo: https://github.com/stanford-futuredata/ColBERT

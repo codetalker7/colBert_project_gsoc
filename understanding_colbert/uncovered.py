@@ -15,6 +15,8 @@ from colbert.indexing.collection_indexer import encode
 from colbert.utils.utils import create_directory, print_message
 from colbert.infra.launcher import Launcher
 from colbert.infra.config import BaseConfig, RunConfig, RunSettings
+from colbert.indexing.collection_indexer import CollectionIndexer
+from colbert.infra.launcher import print_memory_stats
 
 dataroot = 'downloads/lotte'
 dataset = 'lifestyle'
@@ -97,9 +99,81 @@ innercontextmanager.__enter__()
 
 ## all the encode function code goes within the innercontextmanager
 # return_val = encode(inner_config, collection, shared_lists, shared_queues, indexer.verbose)
+encoder = CollectionIndexer(config=inner_config, collection=collection, verbose=indexer.verbose)
+# encode.run(shared_lists)
 
-innercontextmanager.__exit__()
+## the encode.run(shared_lists) call
+torch_context = torch.inference_mode()
+torch_context.__enter__()
 
-contextmanager.__exit__()
+## all encode.run code must go within torch_context
+## the self.setup() call
+encoder.num_chunks = int(np.ceil(len(encoder.collection) / encoder.collection.get_chunksize()))
+# Saves sampled passages and embeddings for training k-means centroids later 
+# sampled_pids = encoder._sample_pids()
+num_passages = len(encoder.collection)
+typical_doclen = 120  # let's keep sampling independent of the actual doc_maxlen
+sampled_pids = 16 * np.sqrt(typical_doclen * num_passages)
+sampled_pids = min(1 + int(sampled_pids), num_passages)
+sampled_pids = random.sample(range(num_passages), sampled_pids)
+if encoder.verbose > 1:
+    Run().print_main(f"# of sampled PIDs = {len(sampled_pids)} \t sampled_pids[:3] = {sampled_pids[:3]}")
+sampled_pids = set(sampled_pids)
+
+# avg_doclen_est = encoder._sample_embeddings(sampled_pids)
+local_pids = encoder.collection.enumerate(rank=encoder.rank)
+
+# ## checking that local_pids is just normal enumerate
+# mylist = []
+# for idx, passage in local_pids:
+#     mylist.append(passage)
+# assert mylist == collection.data
+
+local_sample = [passage for pid, passage in local_pids if pid in sampled_pids]  # those passages whose id is in sampled_pids
+
+local_sample_embs, doclens = encoder.encoder.encode_passages(local_sample)
+type(local_sample_embs)     # a tensor
+local_sample_embs.shape     # two dimensional tensor
+## so local_sample_embs is a matrix containing the embeddings of all tokens over all local_sample
+doclens
+assert len(doclens) == len(sampled_pids)
+
+torch.cuda.is_available()
+torch.distributed.is_available() and torch.distributed.is_initialized()
+
+encoder.num_sample_embs = torch.tensor([local_sample_embs.size(0)]).cuda()
+avg_doclen_est = sum(doclens) / len(doclens) if doclens else 0
+avg_doclen_est = torch.tensor([avg_doclen_est]).cuda()
+nonzero_ranks = torch.tensor([float(len(local_sample) > 0)]).cuda()
+
+avg_doclen_est = avg_doclen_est.item() / nonzero_ranks.item()
+encoder.avg_doclen_est = avg_doclen_est
+Run().print(f'avg_doclen_est = {avg_doclen_est} \t len(local_sample) = {len(local_sample):,}')
+torch.save(local_sample_embs.half(), os.path.join(encoder.config.index_path_, f'sample.{encoder.rank}.pt'))
+assert local_sample_embs.half() == local_sample_embs
+
+avg_doclen_est = avg_doclen_est
+
+num_passages = len(encoder.collection)
+encoder.num_embeddings_est = num_passages * avg_doclen_est
+encoder.num_partitions = int(2 ** np.floor(np.log2(16 * np.sqrt(encoder.num_embeddings_est))))
+if encoder.verbose > 0:
+    Run().print_main(f'Creating {encoder.num_partitions:,} partitions.')
+    Run().print_main(f'*Estimated* {int(encoder.num_embeddings_est):,} embeddings.')
+
+encoder._save_plan()
+
+## encoder.setup() call finishes
+## encoder.train() call starts
+# if not encoder.config.resume or not encoder.saver.try_load_codec():
+#     encoder.train(shared_lists) # Trains centroids from selected passages
+if encoder.rank > 0:
+    pass
+
+torch_context.__exit__(None, None, None)
+
+innercontextmanager.__exit__(None, None, None)
+
+contextmanager.__exit__(None, None, None)
 
 return_val = encode(indexer.config, collection, [], [], indexer.verbose)

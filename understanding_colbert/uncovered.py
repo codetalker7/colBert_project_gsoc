@@ -13,7 +13,7 @@ from colbert.infra import Run, RunConfig, ColBERTConfig
 from colbert.data import Queries, Collection
 from colbert import Indexer, Searcher
 from colbert.indexing.collection_indexer import encode
-from colbert.utils.utils import create_directory, print_message
+from colbert.utils.utils import create_directory, print_message, flatten
 from colbert.infra.launcher import Launcher
 from colbert.infra.config import BaseConfig, RunConfig, RunSettings
 from colbert.indexing.collection_indexer import CollectionIndexer
@@ -21,6 +21,8 @@ from colbert.infra.launcher import print_memory_stats
 import faiss
 from colbert.indexing.codecs.residual import ResidualCodec
 import tqdm
+from colbert.indexing.loaders import load_doclens
+import re
 
 dataroot = 'downloads/lotte'
 dataset = 'lifestyle'
@@ -532,13 +534,148 @@ for chunk_idx in range(encoder.num_chunks):
 encoder.num_embeddings = embedding_offset
 assert len(encoder.embedding_offsets) == encoder.num_chunks
 ## _collect_embedding_id_offset() call ends here
+## self._build_ivf()
+## the _build_ivf() call
+if encoder.verbose > 1:
+    Run().print_main("#> Building IVF...")
 
+codes = torch.zeros(encoder.num_embeddings,).long() # tensor with an int value for each embedding
 
+if encoder.verbose > 1:
+    Run().print_main("#> Loading codes...")
+
+## the below for loop just loads the saved codes for all the embeddings across all chunks
+for chunk_idx in tqdm.tqdm(range(encoder.num_chunks)):
+    offset = encoder.embedding_offsets[chunk_idx]
+    # chunk_codes = ResidualCodec.Embeddings.load_codes(encoder.config.index_path_, chunk_idx)
+    codes_path = os.path.join(encoder.config.index_path_, f'{chunk_idx}.codes.pt')
+    chunk_codes = torch.load(codes_path, map_location='cpu')
+    codes[offset:offset+chunk_codes.size(0)] = chunk_codes
+
+assert offset+chunk_codes.size(0) == codes.size(0), (offset, chunk_codes.size(0), codes.size())
+
+if encoder.verbose > 1:
+    Run().print_main(f"Sorting codes...")
+
+    print_memory_stats(f'RANK:{encoder.rank}')
+
+codes = codes.sort()
+ivf, values = codes.indices, codes.values       # ivf is the indice of the given code in the original codes array
+
+if encoder.verbose > 1:
+    print_memory_stats(f'RANK:{encoder.rank}')
+
+    Run().print_main(f"Getting unique codes...")
+
+ivf_lengths = torch.bincount(values, minlength=encoder.num_partitions)  # count the frequency of each centroid id
+assert ivf_lengths.size(0) == encoder.num_partitions
+
+# _, _ = optimize_ivf(ivf, ivf_lengths, self.config.index_path_)
+## the optimize_ivf call
+orig_ivf = ivf
+orig_ivf_lengths = ivf_lengths
+index_path = encoder.config.index_path_
+verbose=3
+
+if verbose > 1:
+    print_message("#> Optimizing IVF to store map from centroids to list of pids..")
+
+    print_message("#> Building the emb2pid mapping..")
+
+# all_doclens = load_doclens(index_path, flatten=False)
+## the load_doclens call
+directory = index_path
+flatten = False
+doclens_filenames = {}
+
+for filename in os.listdir(directory):
+    match = re.match("doclens.(\d+).json", filename)
+
+    if match is not None:
+        doclens_filenames[int(match.group(1))] = filename
+
+## doclens_filenames is a dictionary mapping a chunk to it's corresponding doclens file
+doclens_filenames = [os.path.join(directory, doclens_filenames[i]) for i in sorted(doclens_filenames.keys())]   # now we have a list of filenames for each doclens file
+
+all_doclens = [ujson.load(open(filename)) for filename in doclens_filenames]    # list of lists, each list containing a doclens list for a chunk
+
+if flatten:
+    all_doclens = [x for sub_doclens in all_doclens for x in sub_doclens]
+    
+if len(all_doclens) == 0:
+    raise ValueError("Could not load doclens")
+
+all_doclens = all_doclens
+
+## load_doclens call ends here
+
+all_doclens = flatten(all_doclens)      # get all the doclens in a single list
+assert len(all_doclens) == len(encoder.collection.data)
+total_num_embeddings = sum(all_doclens)
+
+emb2pid = torch.zeros(total_num_embeddings, dtype=torch.int)    # a pid for each embedding
+
+# the following loop sets the pid for each embedding
+offset_doclens = 0
+for pid, dlength in enumerate(all_doclens):
+    emb2pid[offset_doclens: offset_doclens + dlength] = pid
+    offset_doclens += dlength
+
+if verbose > 1:
+    print_message("len(emb2pid) =", len(emb2pid))
+
+## recall that values is the sorted list of all codes of all embeddings
+## and ivf is the list of indices where the correpsonding codes lied in the original list of codes
+## in particular, unsorted_codes[ivf[i]] = codes[i]
+## moreover, orig_ivf = ivf
+
+ivf = emb2pid[orig_ivf]     ## for each code in values tensor, map it to the pid of the corresponding embedding
+unique_pids_per_centroid = []
+ivf_lengths = []
+
+## recall that orig_ivf_lengths is the list of frequencies of each centroid (in sorted order)
+offset = 0
+for length in tqdm.tqdm(orig_ivf_lengths.tolist()):
+    pids = torch.unique(ivf[offset:offset+length])      # get all pids in which the corresponding centroid lies. works because list of centroids (values) is in sorted order
+    unique_pids_per_centroid.append(pids)       # get the unique pids
+    ivf_lengths.append(pids.shape[0])           # ivf_lengths now contains, for each centroid id, the number of unique pids it contains
+    offset += length
+
+assert len(unique_pids_per_centroid) == encoder.num_partitions
+
+ivf = torch.cat(unique_pids_per_centroid)       # can cat all these, since we have ivf_lengths now to get all the pids per each centroid
+ivf_lengths = torch.tensor(ivf_lengths)
+
+original_ivf_path = os.path.join(index_path, 'ivf.pt')
+optimized_ivf_path = os.path.join(index_path, 'ivf.pid.pt')
+torch.save((ivf, ivf_lengths), optimized_ivf_path)
+if verbose > 1:
+    print_message(f"#> Saved optimized IVF to {optimized_ivf_path}")
+    if os.path.exists(original_ivf_path):
+        print_message(f"#> Original IVF at path \"{original_ivf_path}\" can now be removed")
+
+## _build_ivf call ends here
+## self._update_metadata() call
+config = encoder.config
+encoder.metadata_path = os.path.join(config.index_path_, 'metadata.json')
+if encoder.verbose > 1:
+    Run().print("#> Saving the indexing metadata to", encoder.metadata_path, "..")
+with open(encoder.metadata_path, 'w') as f:
+    d = {'config': config.export()}
+    d['num_chunks'] = encoder.num_chunks
+    d['num_partitions'] = encoder.num_partitions
+    d['num_embeddings'] = encoder.num_embeddings
+    d['avg_doclen'] = encoder.num_embeddings / len(encoder.collection)
+
+    f.write(ujson.dumps(d, indent=4) + '\n')
+
+## _update_metadata call ends here
+## finalize call ends here
+## run call ends here
+## encode call ends here
 
 torch_context.__exit__(None, None, None)
 
 innercontextmanager.__exit__(None, None, None)
 
 contextmanager.__exit__(None, None, None)
-
-return_val = encode(indexer.config, collection, [], [], indexer.verbose)

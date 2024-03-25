@@ -4,6 +4,7 @@ import pdb
 sys.path.insert(0, '../')
 import random
 import time
+import ujson
 
 import numpy as np
 import torch
@@ -19,6 +20,7 @@ from colbert.indexing.collection_indexer import CollectionIndexer
 from colbert.infra.launcher import print_memory_stats
 import faiss
 from colbert.indexing.codecs.residual import ResidualCodec
+import tqdm
 
 dataroot = 'downloads/lotte'
 dataset = 'lifestyle'
@@ -385,7 +387,152 @@ else:
 # train call ends here
 
 ## self.train(shared_lists) call ends here
-## self.index()
+## self.index() call
+## we'll do it without threading
+encoder.saver.codec = encoder.saver.load_codec()
+batches = encoder.collection.enumerate_batches(rank=encoder.rank)     # batch the collection into batches of size given by collection.get_chunksize()
+# each batch contains (chunk_idx, offset, batch), where offset is the id of the first passage in the batch
+
+
+# # let's first try to save a single batch
+# chunk_idx, offset, passages = next(batches)
+# embs, doclens = encoder.encoder.encode_passages(passages)
+# if encoder.use_gpu:
+#     assert embs.dtype == torch.float16
+# else:
+#     assert embs.dtype == torch.float32
+#     embs = embs.half()
+# if encoder.verbose > 1:
+#     Run().print_main(f"#> Saving chunk {chunk_idx}: \t {len(passages):,} passages "
+#                     f"and {embs.size(0):,} embeddings. From #{offset:,} onward.")
+# # encoder.saver.save_chunk(chunk_idx, offset, embs, doclens)
+# # compressed_embs = self.codec.compress(embs)
+# # the codec.compress call
+#
+# ## example on a single batch
+# # single_batch = embs.split(1 << 18)[0]
+# # if encoder.saver.codec.use_gpu:
+# #     single_batch = single_batch.cuda().half()
+# # codes_ = encoder.saver.codec.compress_into_codes(single_batch, out_device=single_batch.device)
+# # centroids_ = encoder.saver.codec.lookup_centroids(codes_, out_device=single_batch.device)  # tensor containing centroids corresponding to ids in codes_
+# # residuals_ = (single_batch - centroids_)
+# # binarized_residuals = encoder.saver.codec.binarize(residuals_).cpu() # this is the function which quantizes the residuals
+#
+# codes, residuals = [], []
+# for batch in embs.split(1 << 18):
+#     if encoder.saver.codec.use_gpu:
+#         batch = batch.cuda().half()
+#     codes_ = encoder.saver.codec.compress_into_codes(batch, out_device=batch.device)  # list of nearest centroid ids
+#     assert codes_.size()[0] == batch.size()[0]
+#     centroids_ = encoder.saver.codec.lookup_centroids(codes_, out_device=batch.device)  # tensor containing centroids corresponding to ids in codes_
+#
+#     residuals_ = (batch - centroids_)
+#
+#     codes.append(codes_.cpu())
+#     residuals.append(encoder.saver.codec.binarize(residuals_).cpu())  # this is where the residuals are quantized
+#
+# codes = torch.cat(codes)
+# residuals = torch.cat(residuals)
+#
+# compressed_embs = ResidualCodec.Embeddings(codes, residuals)
+# # self.codec.compress(embs) call ends here
+# # after this, self.saver_queue call is made. which we don't do here. Instead, we directly call self._write_chunk_to_disk here.
+# # _write_chunk_to_disk call
+# path_prefix = os.path.join(encoder.saver.config.index_path_, str(chunk_idx))
+# compressed_embs.save(path_prefix)
+#
+# doclens_path = os.path.join(encoder.saver.config.index_path_, f'doclens.{chunk_idx}.json')
+# with open(doclens_path, 'w') as output_doclens:
+#     ujson.dump(doclens, output_doclens)
+#
+# metadata_path = os.path.join(encoder.saver.config.index_path_, f'{chunk_idx}.metadata.json')
+# with open(metadata_path, 'w') as output_metadata:
+#     metadata = {'passage_offset': offset, 'num_passages': len(doclens), 'num_embeddings': len(compressed_embs)}
+#     ujson.dump(metadata, output_metadata)
+# ## _write_chunk_to_disk call ends here
+# ## saving a single batch ends here
+#
+# del embs, doclens
+
+for chunk_idx, offset, passages in tqdm.tqdm(batches, disable=encoder.rank > 0):
+    # can ignore the if block in the code here
+    embs, doclens = encoder.encoder.encode_passages(passages)
+    if encoder.use_gpu:
+        assert embs.dtype == torch.float16
+    else:
+        assert embs.dtype == torch.float32
+        embs = embs.half()
+    if encoder.verbose > 1:
+        Run().print_main(f"#> Saving chunk {chunk_idx}: \t {len(passages):,} passages "
+                        f"and {embs.size(0):,} embeddings. From #{offset:,} onward.")
+    # self.saver.save_chunk(hunk_idx, offset, embs, doclens)
+    
+    codes, residuals = [], []
+    for batch in embs.split(1 << 18):
+        if encoder.saver.codec.use_gpu:
+            batch = batch.cuda().half()
+        codes_ = encoder.saver.codec.compress_into_codes(batch, out_device=batch.device)  # list of nearest centroid ids
+        assert codes_.size()[0] == batch.size()[0]
+        centroids_ = encoder.saver.codec.lookup_centroids(codes_, out_device=batch.device)  # tensor containing centroids corresponding to ids in codes_
+
+        residuals_ = (batch - centroids_)
+
+        codes.append(codes_.cpu())
+        residuals.append(encoder.saver.codec.binarize(residuals_).cpu())  # this is where the residuals are quantized
+
+    codes = torch.cat(codes)
+    residuals = torch.cat(residuals)
+
+    compressed_embs = ResidualCodec.Embeddings(codes, residuals)
+    # self.codec.compress(embs) call ends here
+    # after this, self.saver_queue call is made. which we don't do here. Instead, we directly call self._write_chunk_to_disk here.
+    # _write_chunk_to_disk call
+    path_prefix = os.path.join(encoder.saver.config.index_path_, str(chunk_idx))
+    compressed_embs.save(path_prefix)
+
+    doclens_path = os.path.join(encoder.saver.config.index_path_, f'doclens.{chunk_idx}.json')
+    with open(doclens_path, 'w') as output_doclens:
+        ujson.dump(doclens, output_doclens)
+
+    metadata_path = os.path.join(encoder.saver.config.index_path_, f'{chunk_idx}.metadata.json')
+    with open(metadata_path, 'w') as output_metadata:
+        metadata = {'passage_offset': offset, 'num_passages': len(doclens), 'num_embeddings': len(compressed_embs)}
+        ujson.dump(metadata, output_metadata)
+    ## _write_chunk_to_disk call ends here
+
+    del embs, doclens
+
+## self.index() call ends here
+## the self.finalize() call
+encoder._check_all_files_are_saved()
+## self._collect_embedding_id_offset() call
+## _collect_embedding_id_offset just stores the first embedding id in a given chunk's metadata
+## it also sets the total number of embeddings computed
+passage_offset = 0
+embedding_offset = 0
+
+encoder.embedding_offsets = []
+for chunk_idx in range(encoder.num_chunks):
+    metadata_path = os.path.join(encoder.config.index_path_, f'{chunk_idx}.metadata.json')
+
+    with open(metadata_path) as f:
+        chunk_metadata = ujson.load(f)
+
+        chunk_metadata['embedding_offset'] = embedding_offset
+        encoder.embedding_offsets.append(embedding_offset)
+
+        assert chunk_metadata['passage_offset'] == passage_offset, (chunk_idx, passage_offset, chunk_metadata)
+
+        passage_offset += chunk_metadata['num_passages']
+        embedding_offset += chunk_metadata['num_embeddings']
+
+    with open(metadata_path, 'w') as f:
+        f.write(ujson.dumps(chunk_metadata, indent=4) + '\n')
+
+encoder.num_embeddings = embedding_offset
+assert len(encoder.embedding_offsets) == encoder.num_chunks
+## _collect_embedding_id_offset() call ends here
+
 
 
 torch_context.__exit__(None, None, None)

@@ -76,4 +76,5 @@ Again, here the main meat is in the `run` function of the indexer. The `run` fun
         - Once this is done, all these values are saved in `plan.json`.
 
 Next, we'll study the function `self.train` (which does the kmeans clustering).
-    - `_concatenate_and_split_sample`: First, an empty `torch` tensor of the appropriate dimenion is allocated (this tensor will hold the embeddings that were saved in `sample.rank.pt`, with `rank = 0`).
+    - `_concatenate_and_split_sample`: This function just loads all the embeddings in a 2-dimensional tensor (where the number of rows is the number of saved embeddings, and the number of columns is the embedding dimension). It randomly permutes the tensor by the row (i.e, randomly permutes all the embeddings), and then splits the tensor into a sample tensor and a heldout tensor (the holding-out fraction is `0.05`, or 5 percent). 
+    - `_train_kmeans`: this function is used to compute the centroids.

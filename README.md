@@ -193,7 +193,7 @@ Using this information we'll calculate the following:
 
 #### Running kmeans and getting the cluster centroids
 
-Now, we'll discuss how the kmeans algorithm computes the centroids for the clusters. Suppose `sample` is a tensor containing all our saved sample embedings (from the previous step). We first split `sample` into two sets: a smaller set to train kmeans on, and a `heldout` set. For this, we'll randomly pick a `heldout_fraction` fraction of `sample`, and put it in a tensor called `heldout`. For instance, we can do this with a call like this:
+Now, we'll discuss how the kmeans algorithm computes the centroids for the clusters. Suppose `sample` is a tensor containing all our saved sample embeddings (from the previous step). We first split `sample` into two sets: a smaller set to train kmeans on, and a `heldout` set. For this, we'll randomly pick a `heldout_fraction` fraction of `sample`, and put it in a tensor called `heldout`. For instance, we can do this with a call like this:
 
 ```
 sample, heldout = split(sample, heldout_fraction=0.05)      # leaving about 5% of the sampled embeddings in the heldout set
@@ -209,7 +209,7 @@ Before describing the further computations done with the centroids, we'll now de
 
 ```julia
 struct ResidualCodec
-    centroids::Array{Float32}                     # the tensor containing centroids
+    centroids::Array{Float32}                   # the tensor containing centroids
     dim::Int                                    # the embedding dimension
     nbits::Int                                  # number of bits into which the residuals are to be compressed
     avg_residual::Float                         # the average residual
@@ -230,18 +230,47 @@ lookup_centroids(codec::ResidualCodec, codes::Vector{Int})
 ```
 We'll now describe how each of these methods work.
 
-1. `load`: This method simply loads a `ResidualCodec` into memory. See the `save` function below for format in which the codec is saved.
+1. `load`: This method simply loads a `ResidualCodec` into memory. See the `save` function below for the format in which the codec is saved.
 
-2. `save`: This method saves the residual codec. `centroids` are saved in a separate file (eg., `centroids.pt` in case of a `torch` tensor); the `avg_residual` is saved in it's own file (eg, `avg_residual.pt`). And the `bucket_cutoffs` and `bucket_weights` are saved in a separate file (eg., `buckets.pt`).
+2. `save`: This method saves the `ResidualCodec`. `centroids` are saved in a separate file (eg., `centroids.pt` in case of a `torch` tensor); the `avg_residual` is saved in it's own file (eg., `avg_residual.pt`). And the `bucket_cutoffs` and `bucket_weights` are saved in a separate file (eg., `buckets.pt`).
 
-3. `compress`: This function takes a tensor `embs` of all the embeddings, and compresses them. Compressing the embeddings involves two steps: first, for each embedding, the nearest centroid ID is computed (where *nearest* means the centroid with the maximum inner product with the embedding. See the `compress_into_codes` function below). So suppose, `emb` is the embedding, and `centroid` is the centroid which is closest to this embedding. The residual is simply `emb - centroid`. The next step of the compression involves compressing the `residual` into `nbits` bits; this is done via the `binarize` function. Finally, the compression is just the tuple `codes, residuals_packed`, where `codes` is a tensor containing the nearest centroid IDs for each embedding, and `residuals_packed` is a tensor containing the compressed residuals. [This file](https://github.com/stanford-futuredata/ColBERT/blob/852271661b22567e3720f2dd56b6d503613a3228/colbert/indexing/codecs/residual.py#L167) contains the python implementation.
+3. `compress`: This function takes a tensor `embs` of all the embeddings, and compresses them. Compressing the embeddings involves two steps: first, for each embedding, the nearest centroid ID is computed (where *nearest* means the centroid with the maximum inner product with the embedding. See the `compress_into_codes` function below). So suppose, `emb` is the embedding, and `centroid` is the centroid which is closest to this embedding. The residual is simply `emb - centroid`. The next step of the compression involves compressing the `residual` into `nbits` bits; this is done via the `binarize` function. Finally, the compression is just the tuple `codes, residuals_packed`, where `codes` is a tensor containing the nearest centroid IDs for each embedding, and `residuals_packed` is a tensor containing the compressed residuals. [This file](https://github.com/stanford-futuredata/ColBERT/blob/852271661b22567e3720f2dd56b6d503613a3228/colbert/indexing/codecs/residual.py#L167) contains the Python implementation.
 
 4. `binarize`: This function is mainly responsible for compressing residuals. It takes a tensor `residuals` containing all the residual embeddings, and returns a tensor of type `UInt8` containing all the compressed residuals. See the [Python implementation](https://github.com/stanford-futuredata/ColBERT/blob/852271661b22567e3720f2dd56b6d503613a3228/colbert/indexing/codecs/residual.py#L186) for example.
-5. `compress_into_codes`: This function simply takes a tensor `embs` of embeddings, and for each embedding, computes the ID of the nearest centroid (where nearest means the centroid having the maximum inner product). The computation is done in batches for higher efficiency. See the [Python implementation](https://github.com/stanford-futuredata/ColBERT/blob/852271661b22567e3720f2dd56b6d503613a3228/colbert/indexing/codecs/residual.py#L167).
 
-6. `lookup_centroids`: This function simply takes a list of centroid IDs, and returns a tensor containing the corresponding `centroids`.
+5. `compress_into_codes`: This function simply takes a tensor `embs` of embeddings, and for each embedding, computes the ID of the nearest centroid (where nearest means the centroid having the maximum inner product). The computation is done in batches for higher efficiency. See the [Python implementation](https://github.com/stanford-futuredata/ColBERT/blob/852271661b22567e3720f2dd56b6d503613a3228/colbert/indexing/codecs/residual.py#L204).
+
+6. `lookup_centroids`: This function simply takes a list of centroid IDs, and returns a tensor containing the corresponding `centroids`. For instance, look at the [Python implementation](https://github.com/stanford-futuredata/ColBERT/blob/852271661b22567e3720f2dd56b6d503613a3228/colbert/indexing/codecs/residual.py#L222).
 
 
 #### Computing average residuals
 
-Once the `centroids` are computed, we then compute three quantities: `bucket_cutoffs`, `bucket_weights` and the `avg_residual`. The `bucket_cutoffs` and `bucket_weights` are used in the compression/decompression of the residuals.
+Once the `centroids` are computed, we then compute three quantities: `bucket_cutoffs`, `bucket_weights` and the `avg_residual`. The `bucket_cutoffs` and `bucket_weights` are used in the compression/decompression of the residuals. All these quantities are computed using the `heldout` tensor we computed in the previous steps. Here is how the average residuals are computed:
+
+1. For each embedding in `heldout`, we first compute it's nearest centroid ID. This step can be easily done with the following call:
+    ```julia
+    nearest_ids = compress_into_codes(heldout)      # 1D tensor containing the nearest centroid IDs
+    ```
+
+2. Then, we simply convert these IDs to a tensor containing all the corresponding centroids. This is done using the following call:
+    ```julia
+    nearest_centroids = lookup_centroids(nearest_ids)
+    ```
+
+3. Next, the residual embeddings are just the tensor `heldout_residual = heldout - nearest_centroids`.
+
+4. Next, to compute the average residual tensor, we take the average of `abs(heldout_residual)` over each dimension. Suppose the resultant 1D tensor is `avg_residual_tensor`. The `avg_residual` is then just the `mean(avg_residual_tensor)`.
+
+Next, we describe how `bucket_cutoffs` and `bucket_weights` will be computed.
+
+1. First, we define some quantiles as follows:
+    ```
+    quantiles = (Vector(0:2^nbits - 1)) ./ (2^nbits)
+    bucket_cutoffs_quantiles = quantiles[1:2^nbits - 1]
+    bucket_weights_quantiles = quantiles .+ (0.5 / 2^nbits)
+    ```
+
+2. Then, using `bucket_cutoffs_quantiles` and `bucket_weights_quantiles`, we compute the corresponding quantiles of the `heldout_residual` tensor.
+
+Once the average residual data is computed, we save this data in the format mentioned in the previous section.
+

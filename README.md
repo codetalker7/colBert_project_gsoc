@@ -274,3 +274,14 @@ Next, we describe how `bucket_cutoffs` and `bucket_weights` will be computed.
 
 Once the average residual data is computed, we save this data in the format mentioned in the previous section.
 
+### Encoding all passages and saving chunks
+
+At this point, we've computed all the centroids, and all the necessary data required for compression/decompression. All of this data has been stored in the `ResidualCodec` type. Now we discuss the next step of indexing: converting all documents to embeddings and storing their compressions in chunks. This process can be sped up using multithreading, but here we just discuss a single-threaded solution (which is easily extensible to a multi-threaded solution).
+
+First, we batch all of our passages into batches of size given by `get_chunksize(collection)` (see previous sections). A batch will just be a tuple `(chunk_idx, offset, passages)`, where `chunk_idx` is the index of the batch, `offset` is the index of the *first* passage in the batch, and `passages` is a list containing all the passages in the batch.
+
+We then iterate over all these batches. In each iteration, we compute the `embs, doclens` for each batch (using the `encode_passages` function). Having all the `embs`, we then compute all the nearest centroid IDs for each embedding (using the `compress_into_codes` function); suppose these IDs are stored in the list `codes_`. Then, using `lookup_centroids`, we get all the corresponding centroids, say in the tensor `centroids_`. The residuals for this batch will then be given by `residuals_ = embs_ - centroids_`. The compressed residuals will then be just `binarize(residuals_)`.
+
+Finally, we save all this data to disk. The `codes_` are saved in a file named `{chunk_idx}.codes.pt` (for the case of `torch` tensors); the `residuals_` are saved in a file called `{chunk_idx}.residuals.pt` (again, for `torch` tensors). `doclens` are saved in a file called `doclens.{chunk_idx}.json`. Finally, some metadata is stored in a file called `{chunk_idx}.metadata.json`; this metadata includes the `passage_offset` (the `offset` of the chunk), `num_passages` (number of passages in the chunk), and `num_embeddings` (number of embeddings in the chunk).
+
+### Creating the `ivf` and the optimized `ivf`

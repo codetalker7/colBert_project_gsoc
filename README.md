@@ -284,4 +284,18 @@ We then iterate over all these batches. In each iteration, we compute the `embs,
 
 Finally, we save all this data to disk. The `codes_` are saved in a file named `{chunk_idx}.codes.pt` (for the case of `torch` tensors); the `residuals_` are saved in a file called `{chunk_idx}.residuals.pt` (again, for `torch` tensors). `doclens` are saved in a file called `doclens.{chunk_idx}.json`. Finally, some metadata is stored in a file called `{chunk_idx}.metadata.json`; this metadata includes the `passage_offset` (the `offset` of the chunk), `num_passages` (number of passages in the chunk), and `num_embeddings` (number of embeddings in the chunk).
 
-### Creating the `ivf` and the optimized `ivf`
+### Creating the optimized `ivf`
+
+We'll now desribe the final steps of the indexing process. First, we'll compute the `embedding_offsets` property of our `CollectionIndexer`. As mentioned before, `embedding_offsets` is just a vector, whose length is equal to `num_chunks`, which stores, for each chunk ID, the index of the *first* embedding which is contained inside that chunk. This is easy to do, since, for each chunk, we've already stored the `num_passages` and the `num_embeddings` in it's metadata file. During this process, we also compute the total number of embeddings stored across all the chunks, and save it in the `num_embeddings` property of the `CollectionIndexer`.
+
+Next, we'll compute the `ivf`. The `ivf` is simply a list which stores, for each centroid ID, a list of all the `pid`s of passages such that the passage has an embedding of which the closest centroid ID is this ID (in other words, for each centroid ID, store all the `pid`s that it *contains*). For our purposes, we will compute and save the following data:
+
+1. `ivf`, a vector of type `Vector{Int}`. This vector will consecutively store all the unique `pid`s contained in some centroid ID. For instance, if there are two centroids with IDs `0` and `1`, and centroid `0` contains pids `[100, 2, 3]`, and centroids `1` contains pids `[2, 3, 4, 5]`, then `ivf` will just be the list `[100, 2, , 2, 3 ,4 ,5]`.
+
+2. `ivf_lengths`: This is a list containing the number of unique pids stored in each centroid ID. For the above example, `ivf_lengths` will be the list `[3, 4]`.
+
+Once these are computed, we store these two lists on disk, in a file called `ivf.pid.pt` (say, if these are `torch` tensors).
+
+### Finishing up
+
+As a final step, we save the `config`, `num_chunks`, `num_partitions`, `num_embeddings` and `avg_doclen` fields of our `CollectionIndexer` in a file called `metadata.json`, whose path is the `metadata_path` property of the `CollectionIndexer`. This finishes up the indexing phase.

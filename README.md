@@ -330,3 +330,25 @@ Here is a short description of the above functions:
 3. `search_all` is similar to `search`, but it takes a batch of queries to do work on.
 
 Next, we'll describe the `IndexScorer` type in a bit more detail, and also how the `search` function actually works.
+
+### The `IndexScorer` and `dense_search`. 
+
+The `Searcher` type is just a wrapper around the `IndexScorer` type, which actually does most of the searching (both types are inspired from the corresponding classes, [`Searcher`](https://github.com/stanford-futuredata/ColBERT/blob/852271661b22567e3720f2dd56b6d503613a3228/colbert/searcher.py#L22) and [`IndexScorer`](https://github.com/stanford-futuredata/ColBERT/blob/852271661b22567e3720f2dd56b6d503613a3228/colbert/search/index_storage.py#L20), in the Python implementation)
+
+The `Searcher` will have support for a function called `dense_search`, which has the following template:
+
+```
+dense_search(Q, k)
+```
+
+Above, `Q` is the tensor containing all the query embeddings, and `k` is the number of passages to be retrieved. Depending on the value of `k`, the `dense_search` methods sets a bunch of configuration variables to their appropriate values, like `ncells`, `centroid_score_threshold` and `ndocs` (the Python implementation of [`dense_search`](https://github.com/stanford-futuredata/ColBERT/blob/852271661b22567e3720f2dd56b6d503613a3228/colbert/searcher.py#L106) contains good defaults for these parameters, depending on the range of values `k` belongs to). Setting all these defaults, `dense_search` proceeds to compute the top `k` most relevant passages and scores as follows:
+
+1. First, for each query embedding, the `ncells` closest centroids are computed (where closest just means the centroid with the maximum inner product with the query embedding). Suppose all these centroids are stored in a tensor called `cells`. For simplicity, we can consider the case of `ncells = 1`, in which case `cells` will just be a 1D tensor. Also, a tensor `centroid_scores` is computed, where the shape of the tensor is `(num_partitions, num_query_embeddings)`, where `num_partitions` is the number of centroids `num_query_embeddings` is the number of embeddings in the query. This tensor will just contain all the inner products of all possible combinations of centroids and query embeddings.
+
+2. Then, a list called `pids` is computed, which is the list of all the `pid`s contained inside the centroids in `cells`.
+
+3. Each of these `pids` then is scored to first obtain approximate scores against the query, and the top `ndocs` of these `pids` is chosen as the candidate set of passages to return. Note that these approximate scores are obtained by first using only the pruned `centroid_scores`, and then the approximate `centroid_scores` (and not the residuals; this is the algorithm used in the [PLAID](https://arxiv.org/pdf/2205.09707.pdf) paper). Then the top `ndocs/4` pids (in terms of the approximate centroid scores) are taken as the candidate set.
+
+4. The final list of candidate `pids` is then scored using both the centroids and the residuals. More implementation details of steps 3 and 4 are contained in the [`score_pids`](https://github.com/stanford-futuredata/ColBERT/blob/852271661b22567e3720f2dd56b6d503613a3228/colbert/search/index_storage.py#L111) function of the Python implementation.
+
+Finally, among all these `pids`, the top `k` are chosen and returned along with their computed scores. 

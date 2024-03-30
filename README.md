@@ -299,3 +299,34 @@ Once these are computed, we store these two lists on disk, in a file called `ivf
 ### Finishing up
 
 As a final step, we save the `config`, `num_chunks`, `num_partitions`, `num_embeddings` and `avg_doclen` fields of our `CollectionIndexer` in a file called `metadata.json`, whose path is the `metadata_path` property of the `CollectionIndexer`. This finishes up the indexing phase.
+
+## Searching
+
+Next, we'll describe the implementation of the searching phase. Analogous to the indexing phase, we propose a type called `Searcher`, which will be responsible for searching the most relevant passages corresponding to a query text. Roughly, the `Searcher` will have the following structure:
+
+```julia
+struct Searcher
+    index::String                       # path of the index
+    index_config::ColBERTConfig         # the configuration used by the indexer
+    collection::Collection              # the underlying collection
+    ranker::IndexScorer                 # object used to rank passages
+end
+```
+
+As before, we might add more fields to the `Searcher` type if necessary. The only new field above is the `IndexScorer`, which we'll describe in just a bit. For our use case, a `Searcher` will support the following three methods:
+
+```julia
+encode(searcher::Searcher, query::String)
+search(searcher::Searcher, query::String, k::Int)
+search_all(searcher::Searcher, queries::Vector{Int}, k::Int)
+```
+
+Here is a short description of the above functions:
+
+1. `encode` simply takes up a query string, and applies the underlying BERT model to it to get the corresponding embeddings (this involves other steps too, like adding the query token `[Q]` to the beginning of the query, and padding the query with mask tokens if needed). So, the output of `encode` is a tensor (a 2D tensor) containing the embeddings for all the tokens in the query.
+
+2. `search` takes a query, and returns a list of `k` tuples (`k` is an argument to `search`), where each tuple is of the form `(passage_id, passage_rank, passage_score)`. The top `k`-passages relevant to this query are returned, where `passage_rank` denotes the rank of the passage, and `passage_score` denotes the score of the passage against the query (we'll describe how these are computed in a bit).
+
+3. `search_all` is similar to `search`, but it takes a batch of queries to do work on.
+
+Next, we'll describe the `IndexScorer` type in a bit more detail, and also how the `search` function actually works.

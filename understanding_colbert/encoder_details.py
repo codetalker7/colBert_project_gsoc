@@ -26,16 +26,16 @@ config = ColBERTConfig.load_from_index(index_path)
 ## BaseColBERT
 baseColbert = BaseColBERT(checkpoint, config)
 baseColbert.colbert_config      # the config using which the model was trained
-baseColbert.name
-baseColbert.model
-baseColbert.raw_tokenizer
-baseColbert.bert
-class_factory(baseColbert.name)
+baseColbert.name                # 'downloads/colbertv2.0', the name of the checkpoint
+baseColbert.model               # HF_ColBERT model; a linear layer with input dim 768 and output dim 128 with no bias, and then the BERT model.
+baseColbert.raw_tokenizer       # the underlying BERT tokenizer
+baseColbert.bert                # the underlying BERT model
+class_factory(baseColbert.name) # HF_ColBERT
 
 ## ColBERT
-colBert = ColBERT(checkpoint, config)
-colBert.use_gpu
-colBert.colbert_config.mask_punctuation
+colBert = ColBERT(checkpoint, config)   # a linear layer 768=>128, and then the BERT model.
+colBert.use_gpu                         # true, depends on the underlying config
+colBert.colbert_config.mask_punctuation # true, depends on the underlying config
 colBert.skiplist        # for each punctation, map it to true. also maps it's encoding to true
 string.punctuation
 colBert.raw_tokenizer
@@ -49,5 +49,7 @@ checkPoint.query_tokenizer
 checkPoint.doc_tokenizer
 checkPoint.amp_manager
 
-checkPoint.queryFromText(["hello world"])
-checkPoint.docFromText(["hello world"]).size()
+checkPoint.queryFromText(["hello world"])                   # this is used to convert queries to embeddings
+checkPoint.docFromText(["hello world"]).size()              # this is used to convert documents to embeddings
+
+## docFromText details

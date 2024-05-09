@@ -171,6 +171,37 @@ if bsize:
     batches = [checkPoint.doc(input_ids, attention_mask, keep_dims=keep_dims_, to_cpu=to_cpu)
                 for input_ids, attention_mask in tqdm(text_batches, disable=not showprogress)]
 
+    ## let's see what checkPoint.doc does to a single batch
+    single_input_ids, single_attention_mask = text_batches[0]
+    ## we'll replicate the following call: checkPoint.doc(single_input_ids, attention_mask, keep_dims=keep_dims_, to_cpu=to_cpu)
+    assert keep_dims_ in [True, False, 'return_mask']
+
+    single_input_ids, single_attention_mask = single_input_ids.to(checkPoint.device), single_attention_mask.to(checkPoint.device)
+    D = checkPoint.bert(single_input_ids, attention_mask=single_attention_mask)[0]              # last hidden states; has shape (batch_size, max_tokens_in_batch, 768)
+    D = checkPoint.linear(D)                                                                    # has shape (batch_size, max_tokens_in_batch, 128)
+    mask = torch.tensor(checkPoint.mask(single_input_ids, skiplist=checkPoint.skiplist), device=checkPoint.device).unsqueeze(2).float()
+    """
+    checkPoint.mask takes in the tensor of input token ids, and a skiplist (i.e a list of token ids to skip). it masks out all the 
+    tokens in the skiplist (example, punctuation) and the pad token. the .unsqueeze(2) operation above makes the shape of the 
+    resultant tensor to be (batch_size, max_tokens_in_batch, 1), and the bools are converted to floats (i.e 0.0 or 1.0).
+    """
+    D = D * mask                # mask out the pad token and the skiplist tokens
+
+    D = torch.nn.functional.normalize(D, p=2, dim=2)                # normalize along the last dimension, i.e each vector has unit norm
+    if checkPoint.use_gpu:
+        D = D.half()
+
+    if keep_dims_ is False:
+        D, mask = D.cpu(), mask.bool().cpu().squeeze(-1)
+        D = [d[mask[idx]] for idx, d in enumerate(D)]
+
+    elif keep_dims_ == 'return_mask':
+        # return D, mask.bool()                                     # so just return the batch of normalized masked embeddings, and the boolean mask itself
+
+    # return D
+
+    ## checkPoint.doc call ends here
+
     if keep_dims is True:
         D = _stack_3D_tensors(batches)
         # return (D[reverse_indices], *returned_text)
@@ -180,14 +211,16 @@ if bsize:
 
         for D_, mask_ in batches:
             D.append(D_)
-            mask.append(mask_)
+            mask.append(mask_)                                                              # get all the embedding batches and mask batches as a list
 
-        D, mask = torch.cat(D)[reverse_indices], torch.cat(mask)[reverse_indices]
+        D, mask = torch.cat(D)[reverse_indices], torch.cat(mask)[reverse_indices]           # concatenate them, and get them in the original order
 
-        doclens = mask.squeeze(-1).sum(-1).tolist()
+        ## so now D has shape (num_passages, max_tokens_in_batch, 128). mask has shape (num_passages, max_tokens_in_batch, 1).
 
-        D = D.view(-1, self.colbert_config.dim)
-        D = D[mask.bool().flatten()].cpu()
+        doclens = mask.squeeze(-1).sum(-1).tolist()             # for each passage, get number of attended tokens
+
+        D = D.view(-1, checkPoint.colbert_config.dim)           # flatten out the embeddings, i.e get embeddings for each token in each passage     
+        D = D[mask.bool().flatten()].cpu()                      # remove embeddings for masked tokens
 
         # return (D, doclens, *returned_text)
 
@@ -200,3 +233,4 @@ if bsize:
 # return self.doc(input_ids, attention_mask, keep_dims=keep_dims, to_cpu=to_cpu)
 
 ## checkPoint.docFromText call ends here
+assert D.shape[0] == sum(doclens)

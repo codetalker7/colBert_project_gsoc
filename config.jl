@@ -1,10 +1,10 @@
 Base.@kwdef struct RunSettings
     root::String = joinpath(pwd(), "experiments")
     experiment::String = "default"
-    index_root::String = nothing
+    index_root::Union{Nothing, String} = nothing
     name::String = Dates.format(now(), "yyyy/mm/dd/HH.MM.SS")
     rank::Int = 0
-    nranks::Int = 0
+    nranks::Int = 1
 end
 
 Base.@kwdef struct TokenizerSettings
@@ -15,10 +15,10 @@ Base.@kwdef struct TokenizerSettings
 end
 
 Base.@kwdef struct ResourceSettings
-    checkpoint::String = nothing
-    collection::String = nothing
-    queries::String = nothing
-    index_name::String = nothing
+    checkpoint::Union{Nothing, String} = nothing
+    collection::Union{Nothing, String} = nothing
+    queries::Union{Nothing, String} = nothing
+    index_name::Union{Nothing, String} = nothing
 end
 
 Base.@kwdef struct DocSettings
@@ -29,23 +29,29 @@ end
 
 Base.@kwdef struct QuerySettings
     query_maxlen::Int = 32
-    attent_to_mask_tokens::Bool = False
+    attend_to_mask_tokens::Bool = False
     interaction::String = "colbert"
 end
 
 Base.@kwdef struct IndexingSettings
-    index_path::String = nothing
+    index_path::Union{Nothing, String} = nothing
     index_bsize::Int = 64
     nbits::Int = 1
     kmeans_niters = 4
 end
 
 Base.@kwdef struct SearchSettings
-    ncells::Int = nothing
-    centroid_score_threshold::Float = nothing
-    ndocs::Int = nothing
+    ncells::Union{Nothing, Int} = nothing
+    centroid_score_threshold::Union{Nothing, Float64} = nothing
+    ndocs::Union{Nothing, Int} = nothing
 end
 
 Base.@kwdef struct ColBERTConfig
-    run
+    run_settings::RunSettings
+    tokenizer_settings::TokenizerSettings
+    resource_settings::ResourceSettings
+    doc_settings::DocSettings
+    query_settings::QuerySettings
+    indexing_settings::IndexingSettings
+    search_settings::SearchSettings
 end

@@ -24,12 +24,12 @@ end
 Base.@kwdef struct DocSettings
     dim::Int = 128
     doc_maxlen::Int = 220
-    mask_punctuation::Bool = True
+    mask_punctuation::Bool = true
 end
 
 Base.@kwdef struct QuerySettings
     query_maxlen::Int = 32
-    attend_to_mask_tokens::Bool = False
+    attend_to_mask_tokens::Bool = false
     interaction::String = "colbert"
 end
 

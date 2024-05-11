@@ -43,13 +43,15 @@ config = ColBERTConfig(
 # check if CUDA devices are available
 CUDA.devices()
 
-const PRETRAINED_MODEL = "downloads/colbertv2.0"                            # relative path to where the model is downloaded
+# loading the bert model
+const PRETRAINED_BERT = "colbert-ir/colbertv2.0"                            # relative path to where the model is downloaded
 
-colbert_config = Transformers.load_config(PRETRAINED_MODEL)
-colbert_tokenizer = Transformers.load_tokenizer(PRETRAINED_MODEL)
-colbert_model = Transformers.load_model(PRETRAINED_MODEL)
+bert_config = Transformers.load_config(PRETRAINED_BERT)
+bert_tokenizer = Transformers.load_tokenizer(PRETRAINED_BERT)
+bert_model = Transformers.load_model(PRETRAINED_BERT)
 
-# sampling encoding and decoding of a text
-text = ["this is some sentence which is huggy"]
-tokens = Transformers.encode(colbert_tokenizer, text).token
-decoded_text = Transformers.decode(colbert_tokenizer, tokens)
+# loading the linear layer
+using Pickle
+layers = Pickle.Torch.THload(joinpath(config.resource_settings.checkpoint, "pytorch_model.bin"))
+linear_layer = Dense(Matrix(layers["linear.weight"]))
+

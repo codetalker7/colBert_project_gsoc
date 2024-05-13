@@ -78,3 +78,18 @@ end
 
 integer_ids, integer_mask, reverse_indices = _sort_by_length(integer_ids, integer_mask, bsize)
 batches = _split_into_batches(integer_ids, integer_mask, bsize)
+
+# writing the checkpoint.doc function
+text_batches, reverse_indices = batches, reverse_indices
+
+## for now, we ignore text_batches; implementing the following code for batches is straightforward
+bert_model = Flux.gpu(bert_model)
+integer_ids, integer_mask = Flux.gpu(integer_ids), Flux.gpu(integer_mask)
+mask = Flux.gpu(mask)
+
+## moving one hot ids to gpu and then using bert throws an error!
+D = bert_model((token = integer_ids, attention_mask = mask)).hidden_state
+D = linear_layer(D)
+# hidden_states_onehot_ids = bert_model((token = ids, attention_mask = mask))                             # this throws an error
+
+

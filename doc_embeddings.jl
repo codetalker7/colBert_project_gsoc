@@ -42,7 +42,8 @@ function _split_into_batches(integer_ids::AbstractArray, integer_mask::AbstractM
 end
 
 function getmask(integer_ids::AbstractArray, skiplist::Dict{String, Bool})
-    [[(!(token_id in skiplist)) && token_id != TextEncodeBase.lookup(bert_tokenizer.vocab, bert_tokenizer.padsym) for token_id in doc] for doc in eachcol(integer_ids)]
+    filter = token_id -> !(token_id in skiplist) && token_id != TextEncodeBase.lookup(bert_tokenizer.vocab, bert_tokenizer.padsym)
+    filter.(integer_ids)
 end
 
 function doc(integer_ids::AbstractArray, mask::NeuralAttentionlib.AbstractAttenMask, skiplist::Dict{String, Bool})

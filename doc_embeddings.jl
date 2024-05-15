@@ -32,13 +32,24 @@ end
 
 Split the given `integer_ids` and `integer_mask` into batches of size `bsize`.
 """
-function _split_into_batches(integer_ids, integer_mask, bsize)
+function _split_into_batches(integer_ids::AbstractArray, integer_mask::AbstractMatrix, bsize::Int)
     batch_size = size(integer_ids)[2]
-    batches = []
-    for offset in 1:batch_size:bsize
-        push!(batches, (integer_ids[:, offset:min(batch_size, offset + bsize)], integer_mask[:, offset:min(batch_size, offset + bsize)]))
+    batches = Vector{Tuple{AbstractArray, AbstractMatrix}}()
+    for offset in 1:bsize:batch_size
+        push!(batches, (integer_ids[:, offset:min(batch_size, offset + bsize - 1)], integer_mask[:, offset:min(batch_size, offset + bsize - 1)]))
     end
     batches
+end
+
+function getmask(integer_ids::AbstractArray, skiplist::Dict{String, Bool})
+    [[(!(token_id in skiplist)) && token_id != TextEncodeBase.lookup(bert_tokenizer.vocab, bert_tokenizer.padsym) for token_id in doc] for doc in eachcol(integer_ids)]
+end
+
+function doc(integer_ids::AbstractArray, mask::NeuralAttentionlib.AbstractAttenMask, skiplist::Dict{String, Bool})
+    integer_ids, mask = Flux.gpu(integer_ids), Flux.gpu(mask)
+    D = bert_model((token=integer_ids, attention_mask=mask)).hidden_state
+    D = linear_layer(D)
+    
 end
 
 # the documents and the batch size 
@@ -48,7 +59,7 @@ docs = [
     "a",
     "this is some longer text, so length should be longer",
 ]
-bsize = 4
+bsize = 2
 
 # converting docs to an embeddings tensor; the tensor will be of shape (total_num_attended_tokens, 128), where
 # total_num_attended_tokens is the total number of attended tokens across all the docs
@@ -71,9 +82,10 @@ ids, mask = encoded_text.token, encoded_text.attention_mask
 
 integer_ids = reinterpret(Int32, ids)
 @test isequal(bert_model((token = integer_ids, attention_mask=mask)), bert_model((token = ids, attention_mask=mask)))
+
 ## to revert integer_ids to one-hot encoding, we can do onehotbatch(integer_ids, 1:size(bert_tokenizer.vocab.list)[1])
 ## onehotbatch doesn't work! Transformers uses it's own OneHotArray (see PrimitiveOneHot.jl). So we need to do
-## integer_ids = reinterpret(Int32, ids) and OneHotArray{VOCABSIZE}(integer_ids) to convert the encodings!
+## integer_ids = reinterpret(Int32, ids) and TextEncodeBase.OneHotArray{VOCABSIZE}(integer_ids) to convert the encodings!
 converted_ids = TextEncodeBase.OneHotArray{VOCABSIZE}(integer_ids)
 @test isequal(ids, converted_ids)
 @test isequal(bert_model((token = converted_ids, attention_mask=mask)), bert_model((token = integer_ids, attention_mask=mask)))
@@ -96,11 +108,21 @@ text_batches, reverse_indices = batches, reverse_indices
 
 ## for now, we ignore text_batches; implementing the following code for batches is straightforward
 bert_model = Flux.gpu(bert_model)
+linear_layer = Flux.gpu(linear_layer)
 integer_ids, integer_mask = Flux.gpu(integer_ids), Flux.gpu(integer_mask)
 mask = Flux.gpu(mask)
 
 ## moving one hot ids to gpu and then using bert throws an error!
 D = bert_model((token = integer_ids, attention_mask = mask)).hidden_state
 D = linear_layer(D)
+
+## creating skiplist to skip punctuation
+punctuation_list = string.(collect("!\"#\$%&\'()*+,-./:;<=>?@[\\]^_`{|}~"))
+skiplist = [TextEncodeBase.lookup(bert_tokenizer.vocab, punct) for punct in punctuation_list]
+
+## trying to run doc function on a single batch
+single_input_ids = copy(batches[1][1])
+single_attention_mask = copy(batches[1][2])
+
 
 

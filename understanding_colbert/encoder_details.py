@@ -8,7 +8,7 @@ from colbert.modeling.tokenization import QueryTokenizer, DocTokenizer
 import os
 import pdb
 import string
-import tqdm
+from tqdm import tqdm
 import torch
 from colbert.parameters import DEVICE
 

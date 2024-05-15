@@ -55,6 +55,7 @@ batch_text = [". " * doc for doc in docs]
 using Transformers.TextEncoders
 using OneHotArrays
 using NeuralAttentionlib
+using TextEncodeBase
 VOCABSIZE = size(bert_tokenizer.vocab.list)[1]
 encoded_text = encode(bert_tokenizer, batch_text)
 ## for some reason, all ids are 1 more than the corresponding python ids
@@ -63,8 +64,11 @@ ids, mask = encoded_text.token, encoded_text.attention_mask
 ## ids has size (vocab_size, max_tokens_in_passage, num_passages)
 
 integer_ids = Matrix(onecold(ids))
+@test isequal(bert_model((token = integer_ids, attention_mask=mask)), bert_model((token = ids, attention_mask=mask)))
 ## to revert integer_ids to one-hot encoding, we can do onehotbatch(integer_ids, 1:size(bert_tokenizer.vocab.list)[1])
 @test isequal(ids, onehotbatch(integer_ids, 1:VOCABSIZE))
+converted_ids = onehotbatch(integer_ids, 1:VOCABSIZE)
+bert_model((token = onehotbatch(integer_ids, 1:VOCABSIZE), attention_mask=mask))            # why does this throw an error?
 integer_mask = NeuralAttentionlib.getmask(mask, ids)
 integer_mask = integer_mask[1, :, :]
 

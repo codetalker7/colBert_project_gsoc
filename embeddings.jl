@@ -27,6 +27,11 @@ function _sort_by_length(integer_ids::AbstractMatrix, integer_mask::AbstractMatr
     integer_ids[:, indices], integer_mask[:, indices], reverse_indices
 end
 
+"""
+    _split_into_batches(integer_ids::AbstractArray, integer_mask::AbstractMatrix, bsize::Int)::Vector{Tuple{AbstractArray, AbstractMatrix, Int}}
+
+Split the given `integer_ids` and `integer_mask` into batches of size `bsize`.
+"""
 function _split_into_batches(integer_ids, integer_mask, bsize)
     batch_size = size(integer_ids)[2]
     batches = []
@@ -57,25 +62,28 @@ using OneHotArrays
 using NeuralAttentionlib
 using TextEncodeBase
 VOCABSIZE = size(bert_tokenizer.vocab.list)[1]
+
 encoded_text = encode(bert_tokenizer, batch_text)
 ## for some reason, all ids are 1 more than the corresponding python ids
 ## but this makes sense, since julia indices start from 1!
 ids, mask = encoded_text.token, encoded_text.attention_mask
 ## ids has size (vocab_size, max_tokens_in_passage, num_passages)
 
-integer_ids = Matrix(onecold(ids))
+integer_ids = reinterpret(Int32, ids)
 @test isequal(bert_model((token = integer_ids, attention_mask=mask)), bert_model((token = ids, attention_mask=mask)))
 ## to revert integer_ids to one-hot encoding, we can do onehotbatch(integer_ids, 1:size(bert_tokenizer.vocab.list)[1])
-@test isequal(ids, onehotbatch(integer_ids, 1:VOCABSIZE))
-converted_ids = onehotbatch(integer_ids, 1:VOCABSIZE)
-bert_model((token = onehotbatch(integer_ids, 1:VOCABSIZE), attention_mask=mask))            # why does this throw an error?
+## onehotbatch doesn't work! Transformers uses it's own OneHotArray (see PrimitiveOneHot.jl). So we need to do
+## integer_ids = reinterpret(Int32, ids) and OneHotArray{VOCABSIZE}(integer_ids) to convert the encodings!
+converted_ids = TextEncodeBase.OneHotArray{VOCABSIZE}(integer_ids)
+@test isequal(ids, converted_ids)
+@test isequal(bert_model((token = converted_ids, attention_mask=mask)), bert_model((token = integer_ids, attention_mask=mask)))
 integer_mask = NeuralAttentionlib.getmask(mask, ids)
 integer_mask = integer_mask[1, :, :]
 
 ## add the [D] marker token id
 D_marker_token_id = 3
 integer_ids[2, :] .= D_marker_token_id
-ids = onehotbatch(integer_ids, 1:VOCABSIZE)
+ids = TextEncodeBase.OneHotArray{VOCABSIZE}(integer_ids)
 for i in 1:size(docs)[1]
     @test isequal(ids[:, 2, i], onehot(D_marker_token_id, 1:VOCABSIZE))
 end
@@ -94,6 +102,5 @@ mask = Flux.gpu(mask)
 ## moving one hot ids to gpu and then using bert throws an error!
 D = bert_model((token = integer_ids, attention_mask = mask)).hidden_state
 D = linear_layer(D)
-# hidden_states_onehot_ids = bert_model((token = ids, attention_mask = mask))                             # this throws an error
 
 

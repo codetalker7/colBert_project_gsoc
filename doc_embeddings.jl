@@ -41,7 +41,7 @@ function _split_into_batches(integer_ids::AbstractArray, integer_mask::AbstractM
     batches
 end
 
-function getmask(integer_ids::AbstractArray, skiplist::Vector{Int})
+function get_mask(integer_ids::AbstractArray, skiplist::Vector{Int})
     filter = token_id -> !(token_id in skiplist) && token_id != TextEncodeBase.lookup(bert_tokenizer.vocab, bert_tokenizer.padsym)
     filter.(integer_ids)
 end
@@ -53,7 +53,7 @@ function doc(integer_ids::AbstractArray, mask::NeuralAttentionlib.AbstractAttenM
     D = linear_layer(D)
 
     # mask out any punctuations 
-    mask = getmask(integer_ids, skiplist)
+    mask = get_mask(integer_ids, skiplist)
 end
 
 # the documents and the batch size 

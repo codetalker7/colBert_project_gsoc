@@ -41,16 +41,19 @@ function _split_into_batches(integer_ids::AbstractArray, integer_mask::AbstractM
     batches
 end
 
-function getmask(integer_ids::AbstractArray, skiplist::Dict{String, Bool})
+function getmask(integer_ids::AbstractArray, skiplist::Vector{Int})
     filter = token_id -> !(token_id in skiplist) && token_id != TextEncodeBase.lookup(bert_tokenizer.vocab, bert_tokenizer.padsym)
     filter.(integer_ids)
 end
 
-function doc(integer_ids::AbstractArray, mask::NeuralAttentionlib.AbstractAttenMask, skiplist::Dict{String, Bool})
+function doc(integer_ids::AbstractArray, mask::NeuralAttentionlib.AbstractAttenMask, skiplist::Vector{Int})
+    # run the batch through bert and the linear layer
     integer_ids, mask = Flux.gpu(integer_ids), Flux.gpu(mask)
     D = bert_model((token=integer_ids, attention_mask=mask)).hidden_state
     D = linear_layer(D)
-    
+
+    # mask out any punctuations 
+    mask = getmask(integer_ids, skiplist)
 end
 
 # the documents and the batch size 
@@ -92,6 +95,7 @@ converted_ids = TextEncodeBase.OneHotArray{VOCABSIZE}(integer_ids)
 @test isequal(bert_model((token = converted_ids, attention_mask=mask)), bert_model((token = integer_ids, attention_mask=mask)))
 integer_mask = NeuralAttentionlib.getmask(mask, ids)
 integer_mask = integer_mask[1, :, :]
+@test isequal(bert_model((token = integer_ids, attention_mask=NeuralAttentionlib.GenericSequenceMask(integer_mask))).hidden_state, bert_model((token = ids, attention_mask=mask)).hidden_state)
 
 ## add the [D] marker token id
 D_marker_token_id = 3
@@ -125,5 +129,10 @@ skiplist = [TextEncodeBase.lookup(bert_tokenizer.vocab, punct) for punct in punc
 single_input_ids = copy(batches[1][1])
 single_attention_mask = copy(batches[1][2])
 
+"""
+getting Length mask for corresponding tokens: (see output of the tokenizer)
+NeuralAttentionlib.LengthMask(Transformers.TextEncoders.getlengths(512)(ids))
+
+"""
 
 

@@ -46,14 +46,19 @@ function get_mask(integer_ids::AbstractArray, skiplist::Vector{Int})
     filter.(integer_ids)
 end
 
-function doc(integer_ids::AbstractArray, mask::NeuralAttentionlib.AbstractAttenMask, skiplist::Vector{Int})
+function doc(integer_ids::AbstractArray, integer_mask::AbstractArray, skiplist::Vector{Int})
     # run the batch through bert and the linear layer
-    integer_ids, mask = Flux.gpu(integer_ids), Flux.gpu(mask)
-    D = bert_model((token=integer_ids, attention_mask=mask)).hidden_state
+    # integer_ids, integer_mask = Flux.gpu(integer_ids), Flux.gpu(integer_mask)
+    D = bert_model((token=integer_ids, attention_mask=NeuralAttentionlib.GenericSequenceMask(integer_mask))).hidden_state
     D = linear_layer(D)
 
     # mask out any punctuations 
     mask = get_mask(integer_ids, skiplist)
+    mask = reshape(mask, (1, size(mask)...))                    # equivalent of unsqueeze
+
+    D = D .* mask                                               # clear out embeddings of masked tokens
+    D = mapslices(v -> iszero(v) ? v : normalize(v), D, dims = 1)                 # normalize each embedding
+    return D, mask
 end
 
 # the documents and the batch size 
@@ -111,28 +116,44 @@ batches = _split_into_batches(integer_ids, integer_mask, bsize)
 # writing the checkpoint.doc function
 text_batches, reverse_indices = batches, reverse_indices
 
-## for now, we ignore text_batches; implementing the following code for batches is straightforward
-bert_model = Flux.gpu(bert_model)
-linear_layer = Flux.gpu(linear_layer)
-integer_ids, integer_mask = Flux.gpu(integer_ids), Flux.gpu(integer_mask)
-mask = Flux.gpu(mask)
-
-## moving one hot ids to gpu and then using bert throws an error!
-D = bert_model((token = integer_ids, attention_mask = mask)).hidden_state
-D = linear_layer(D)
+# ## for now, we ignore text_batches; implementing the following code for batches is straightforward
+# bert_model = Flux.gpu(bert_model)
+# linear_layer = Flux.gpu(linear_layer)
+# integer_ids, integer_mask = Flux.gpu(integer_ids), Flux.gpu(integer_mask)
+# mask = Flux.gpu(mask)
+#
+# ## moving one hot ids to gpu and then using bert throws an error!
+# D = bert_model((token = integer_ids, attention_mask = mask)).hidden_state
+# D = linear_layer(D)
 
 ## creating skiplist to skip punctuation
 punctuation_list = string.(collect("!\"#\$%&\'()*+,-./:;<=>?@[\\]^_`{|}~"))
 skiplist = [TextEncodeBase.lookup(bert_tokenizer.vocab, punct) for punct in punctuation_list]
 
-## trying to run doc function on a single batch
-single_input_ids = copy(batches[1][1])
-single_attention_mask = copy(batches[1][2])
+# ## trying to run doc function on a single batch
+# single_input_ids = copy(batches[1][1])
+# single_attention_mask = copy(batches[1][2])
+# doc(single_input_ids, single_attention_mask, skiplist)          # it works!
 
-"""
-getting Length mask for corresponding tokens: (see output of the tokenizer)
-NeuralAttentionlib.LengthMask(Transformers.TextEncoders.getlengths(512)(ids))
+# get all the normalized embeddings + masks (after removing tokens in skiplist) for each batch
+batches = [doc(input_ids, attention_mask, skiplist) for (input_ids, attention_mask) in text_batches]
 
-"""
+# aggregate all the embeddings
+D, mask = [], []
+for (_D, _mask) in batches
+    push!(D, _D)
+    push!(mask, _mask)
+end
 
+# concat embeddings and masks, and put them in the original order
+D, mask = cat(D..., dims = 3)[:, :, reverse_indices], cat(mask..., dims = 3)[:, :, reverse_indices]
+mask = reshape(mask, size(mask)[2:end])
 
+# get doclens, i.e number of attended tokens for each passage
+doclens = sum(mask, dims = 1) 
+
+# flatten out embeddings, i.e get embeddings for each token in each passage
+D = reshape(D, size(D)[1], prod(size(D)[2:end]))
+
+# remove embeddings for masked tokens
+D = D[:, reshape(mask, prod(size(mask)))]

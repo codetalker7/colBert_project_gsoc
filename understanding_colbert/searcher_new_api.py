@@ -26,13 +26,6 @@ doc_maxlen = 300   # truncate passages at 300 tokens
 checkpoint = 'downloads/colbertv2.0'
 index_name = f'{dataset}.{datasplit}.{nbits}bits'
 
-with Run().context(RunConfig(nranks=1, experiment='notebook')): 
-    config = ColBERTConfig(doc_maxlen=doc_maxlen, nbits=nbits)
-    indexer = Indexer(checkpoint=checkpoint, config=config)
-    indexer.index(name=index_name, collection=collection, overwrite=True)
-
-indexer.get_index() # You can get the absolute path of the index, if needed.
-
 ###### the code that we want to uncover ############
 queries = os.path.join(dataroot, dataset, datasplit, 'questions.search.tsv')
 queries = Queries(path=queries)
